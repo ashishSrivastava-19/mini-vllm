@@ -75,3 +75,16 @@ class BlockManager:
         blocks = [self.blocks[i] for i in seq.block_table]
         self.free(blocks)
         seq.block_table = []
+
+    def can_allocate_for_chunk(self, seq: Sequence, chunk_size: int) -> bool:
+        new_total = seq.num_tokens + chunk_size
+        new_blocks_needed = (new_total + self.block_size - 1) // self.block_size
+        delta = new_blocks_needed - len(seq.block_table)
+        return delta <= self.num_free_blocks
+
+    def allocate_for_chunk(self, seq: Sequence, chunk_size: int) -> None:
+        new_total = seq.num_tokens + chunk_size
+        new_blocks_needed = (new_total + self.block_size - 1) // self.block_size
+        for _ in range(new_blocks_needed - len(seq.block_table)):
+            new_block = self._allocate_one()
+            seq.block_table.append(new_block.block_id)

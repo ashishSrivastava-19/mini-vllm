@@ -58,3 +58,9 @@ class Sequence:
 
     def is_finished(self) -> bool:
         return self.status == SequenceStatus.FINISHED
+
+    def is_prefill_complete(self) -> bool:
+        return self.num_computed_tokens >= self.num_prompt_tokens
+
+    def num_uncomputed_prompt_tokens(self) -> int:
+        return max(0, self.num_prompt_tokens - self.num_computed_tokens)
