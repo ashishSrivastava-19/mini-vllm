@@ -36,8 +36,9 @@ def engine():
         max_num_seqs=8,
         max_num_batched_tokens=2048,
         max_model_len=512,
+        block_size=256,  # flash_attn 2.7 paged kv kernel requires page_block_size % 256 == 0
     ).validate()
-    eng, tok = build_engine(cfg, num_blocks=256)
+    eng, tok = build_engine(cfg, num_blocks=32)
     return eng, tok
 
 
