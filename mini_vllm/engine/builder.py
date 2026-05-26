@@ -2,6 +2,7 @@ from transformers import PreTrainedTokenizerBase
 
 from ..block_manager.manager import BlockManager
 from ..config import Config
+from ..layers.attention_patch import patch_model
 from ..model_runner.loader import ModelLoader
 from ..model_runner.runner import ModelRunner
 from ..scheduler.scheduler import Scheduler
@@ -19,7 +20,9 @@ def build_engine(
     if tokenizer.pad_token_id is None:
         tokenizer.pad_token_id = tokenizer.eos_token_id
 
+    patch_model(model)
     runner = ModelRunner(model=model, config=config, pad_token_id=tokenizer.pad_token_id, info=info)
+    runner.init_kv_cache(num_blocks=num_blocks, block_size=config.block_size)
     bm = BlockManager(num_blocks=num_blocks, block_size=config.block_size)
     sched = Scheduler(
         block_manager=bm,

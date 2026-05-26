@@ -3,14 +3,26 @@ from typing import Optional
 
 import torch
 import torch.nn as nn
-from .attention import mini_attention
+from .attention import mini_attention, mini_decode_attention, write_kv_to_cache
 
 @dataclass
 class AttentionMetadata:
-    cu_seqlens_q: torch.Tensor
-    cu_seqlens_k: torch.Tensor
-    max_seqlen_q: int
-    max_seqlen_k: int
+    k_caches: list[torch.Tensor]
+    v_caches: list[torch.Tensor]
+
+    slot_mapping: torch.Tensor
+
+    prefill_query_indices: torch.Tensor
+    decode_query_indices: torch.Tensor
+
+    has_prefill: bool
+    cu_seqlens_prefill: torch.Tensor
+    max_seqlen_prefill: int
+
+    has_decode: bool
+    decode_cache_seqlens: torch.Tensor
+    decode_block_table: torch.Tensor
+
 
 _current_metadata: Optional[AttentionMetadata] = None
 
@@ -18,7 +30,7 @@ def set_metadata(m: AttentionMetadata | None) -> None:
     global _current_metadata
     _current_metadata = m
 
-def get_metadata() -> Optional[AttentionMetadata]:
+def get_metadata() -> AttentionMetadata:
     assert _current_metadata is not None, "Attention metadata is not set"
     return _current_metadata
 
@@ -31,6 +43,7 @@ def _patched_forward_factory():
         num_heads = cfg.num_attention_heads
         num_kv_heads = getattr(cfg, "num_key_value_heads", num_heads)
         head_dim = self.head_dim
+        layer_idx = self.layer_idx
 
         B, T, _ = hidden_states.shape  # B == 1
         # [B, T, H, D] -> [B, H, T, D] so apply_rotary_pos_emb (unsqueeze_dim=1) broadcasts.
@@ -46,21 +59,38 @@ def _patched_forward_factory():
         k = k.transpose(1, 2).reshape(B * T, num_kv_heads, head_dim).contiguous()
         v = v.transpose(1, 2).reshape(B * T, num_kv_heads, head_dim).contiguous()
 
-        attn = mini_attention(
-            q = q,
-            k = k,
-            v = v,
-            cu_seqlens_q = metadata.cu_seqlens_q,
-            cu_seqlens_k = metadata.cu_seqlens_k,
-            max_seqlen_q = metadata.max_seqlen_q,
-            max_seqlen_k = metadata.max_seqlen_k,
-            softmax_scale = self.scaling,
-            causal = True,
-        )  # [total_tokens, num_heads, head_dim]
-        attn = attn.reshape(B, T, num_heads * head_dim)
-        out = self.o_proj(attn)
-        return out, None
+        k_cache = metadata.k_caches[layer_idx]
+        v_cache = metadata.v_caches[layer_idx]
 
+        write_kv_to_cache(k, v, k_cache, v_cache, metadata.slot_mapping)
+
+        attn_out = torch.empty_like(q)
+
+        if metadata.has_prefill:
+            pidx = metadata.prefill_query_indices
+            attn_out[pidx] = mini_attention(
+                q = q[pidx],
+                k = k[pidx],
+                v = v[pidx],
+                cu_seqlens_q = metadata.cu_seqlens_prefill,
+                cu_seqlens_k = metadata.cu_seqlens_prefill,
+                max_seqlen_q = metadata.max_seqlen_prefill,
+                max_seqlen_k = metadata.max_seqlen_prefill,
+                softmax_scale = self.scaling,
+                causal = True,
+            )
+        if metadata.has_decode:
+            didx = metadata.decode_query_indices
+            attn_out[didx] = mini_decode_attention(
+                q = q[didx],
+                k_cache = k_cache,
+                v_cache = v_cache,
+                cache_seqlens = metadata.decode_cache_seqlens,
+                block_table = metadata.decode_block_table,
+                softmax_scale = self.scaling,
+            )
+        attn_out = attn_out.reshape(B, T, num_heads*head_dim)
+        return self.o_proj(attn_out), None
     return forward
 
 def patch_model(model: nn.Module) -> None:
