@@ -19,6 +19,10 @@ dev = [
     "pytest-xdist",
     "ruff>=0.6",
     "pre-commit>=3.7",
+    # Build backend for source builds of flash-attn under no-build-isolation
+    # (see [tool.uv] below). Not needed when installing the prebuilt wheel.
+    "setuptools",
+    "wheel",
 ]
 
 [build-system]

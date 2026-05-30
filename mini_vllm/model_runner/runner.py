@@ -123,18 +123,29 @@ class ModelRunner:
             else:
                 start = seq.num_computed_tokens - n
                 end = seq.num_computed_tokens
-                if start != 0 or end != seq.num_prompt_tokens:
-                    raise NotImplementedError("Only support scheduling the entire prompt as prefill for now")
-                for offset in range(n):
-                    pos = start + offset
-                    block = seq.block_table[pos // block_size]
-                    slots.append(block*block_size + pos % block_size)
-                    token_ids.append(seq.prompt_token_ids[pos])
-                    positions.append(pos)
-                    prefill_query_indices.append(flat)
-                    flat+=1
-                prefill_seq_lens.append(n)
-                last_logit_indices.append(flat - 1)
+                if start == 0:
+                    for offset in range(n):
+                        pos = start + offset
+                        block = seq.block_table[pos // block_size]
+                        slots.append(block*block_size + pos % block_size)
+                        token_ids.append(seq.prompt_token_ids[pos])
+                        positions.append(pos)
+                        prefill_query_indices.append(flat)
+                        flat+=1
+                    prefill_seq_lens.append(n)
+                    last_logit_indices.append(flat - 1)
+                else:
+                    for offset in range(n):
+                        pos = start + offset
+                        block = seq.block_table[pos // block_size]
+                        slots.append(block * block_size + pos % block_size)
+                        token_ids.append(seq.prompt_token_ids[pos])
+                        positions.append(pos)
+                        decode_query_indices.append(flat)
+                        decode_cache_seqlens.append(pos + 1)
+                        decode_block_tables.append(list(seq.block_table))
+                        flat += 1
+                    last_logit_indices.append(flat - 1)
         
         device = self.config.device
         input_ids = torch.tensor(token_ids, dtype=torch.long, device=device).unsqueeze(0)

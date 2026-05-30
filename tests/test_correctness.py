@@ -118,6 +118,43 @@ def test_greedy_terminates_on_eos(engine_and_tokenizer, hf_model_and_tokenizer):
     assert eng_tokens == hf_tokens
 
 
+@pytest.mark.skipif(not torch.cuda.is_available(), reason="needs CUDA")
+def test_chunked_prefill_matches_hf(hf_model_and_tokenizer):
+    """A prompt longer than max_num_batched_tokens must be split across multiple
+    prefill iterations and still produce HF-identical generations."""
+    from mini_vllm.engine.builder import build_engine
+
+    hf, hf_tok = hf_model_and_tokenizer
+
+    # Build a long prompt that comfortably exceeds the per-iter token budget.
+    base = "The history of the Roman Empire spans many centuries. "
+    long_prompt = base * 60  # ~600 tokens after tokenization
+    prompt_ids = hf_tok.encode(long_prompt)
+    assert len(prompt_ids) > 256, f"need prompt > 256 tokens to force chunking, got {len(prompt_ids)}"
+
+    cfg = Config(
+        model_path=MODEL,
+        dtype=DTYPE,
+        device=DEVICE,
+        max_num_seqs=4,
+        max_num_batched_tokens=256,  # forces the long prompt to chunk
+        max_model_len=1024,
+        block_size=256,
+    ).validate()
+    eng, _ = build_engine(cfg, num_blocks=16)
+
+    hf_tokens = hf_greedy_generate(hf, hf_tok, long_prompt, max_new_tokens=10)
+    eng_tokens = engine_greedy_generate(eng, hf_tok, long_prompt, max_new_tokens=10)
+
+    first_diff = next(
+        (i for i, (a, b) in enumerate(zip(hf_tokens, eng_tokens)) if a != b), None
+    )
+    assert eng_tokens == hf_tokens, (
+        f"chunked-prefill output diverges from HF\n"
+        f"  HF:  {hf_tokens}\n  ENG: {eng_tokens}\n  first diff @ {first_diff}"
+    )
+
+
 def debug_single_step_diff(engine, hf_model, tokenizer, prompt):
     from mini_vllm.engine.sequence import Sequence
     from mini_vllm.scheduler.scheduler import SchedulerOutput

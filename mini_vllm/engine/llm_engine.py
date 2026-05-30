@@ -54,12 +54,20 @@ class LLMEngine:
         logits = self.model_runner.execute(sched_out)
         next_token_ids = self.sampler.sample(logits, sched_out.scheduled_seqs)
 
+        bm = self.block_manager
         finished_now: list[RequestOutput] = []
         for seq, new_token_id in zip(sched_out.scheduled_seqs, next_token_ids, strict=True):
             if not seq.is_prefill_complete():
+                for idx in range(seq.num_computed_tokens // bm.block_size):
+                    bm.maybe_register_full_block(seq, idx)
                 continue
             tok = int(new_token_id)
             seq.append_token(tok)
+
+            n_kv = seq.num_tokens - 1
+            for idx in range(n_kv // bm.block_size):
+                bm.maybe_register_full_block(seq, idx)
+
             sp = seq.sampling_params
 
             finish_reason: str | None = None

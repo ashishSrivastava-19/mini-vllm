@@ -103,10 +103,11 @@ class Scheduler:
             seq = self.waiting[0]
             if not self.block_manager.can_allocate(seq):
                 break
-            chunk_size = min(seq.num_prompt_tokens, token_budget)
             self.block_manager.allocate_for_sequence(seq)
+            remaining = seq.num_uncomputed_prompt_tokens()
+            chunk_size = min(remaining, token_budget)
             seq.status = SequenceStatus.RUNNING
-            seq.num_computed_tokens = chunk_size
+            seq.num_computed_tokens += chunk_size
             self.waiting.popleft()
             self.running.append(seq)
             out.scheduled_seqs.append(seq)

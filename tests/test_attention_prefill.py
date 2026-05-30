@@ -116,26 +116,3 @@ def test_flash_prefill_single_sequence():
     _assert_logits_agree(logits_ref, logits_flash)
 
 
-@pytest.mark.skipif(not torch.cuda.is_available(), reason="needs CUDA")
-def test_chunked_prefill_raises_not_implemented():
-    """Tuesday's runner forbids chunked prefill (a continuation chunk where the
-    prompt is split across iters). One-shot prefill must still work; only
-    mid-prompt continuation should raise."""
-    tok = AutoTokenizer.from_pretrained(MODEL)
-    if tok.pad_token_id is None:
-        tok.pad_token_id = tok.eos_token_id
-    _, runner_flash = _build_runners(tok)
-
-    ids = tok.encode("The capital of France is")
-    s = _seq(0, ids)
-    # Simulate a continuation chunk: scheduler advanced num_computed_tokens past
-    # the start of the prompt but not all the way to the end.
-    half = max(1, len(ids) // 2)
-    s.num_computed_tokens = half + 1  # so start = 1, end = half + 1 — neither full nor first
-    sched = SchedulerOutput(
-        scheduled_seqs=[s],
-        num_scheduled_tokens=[half],
-        num_prefill_tokens=half,
-    )
-    with pytest.raises(NotImplementedError):
-        runner_flash.execute(sched)

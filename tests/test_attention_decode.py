@@ -80,17 +80,46 @@ def test_paged_decode_matches_hf_single(prompt, engine, hf):
     )
 
 
+def _hf_greedy_batched(model, tok, prompts: list[str], n: int) -> list[list[int]]:
+    """Run HF generate in batched mode with left padding — matches the engine's
+    batch dynamics so the comparison is apples-to-apples. Per-prompt fp16
+    accumulation differs between B=1 and B=N for both HF and the engine, so
+    sequential single-prompt HF is the wrong reference for a batched engine run."""
+    tok.padding_side = "left"
+    enc = tok(prompts, return_tensors="pt", padding=True).to(model.device)
+    with torch.inference_mode():
+        out = model.generate(
+            input_ids=enc.input_ids,
+            attention_mask=enc.attention_mask,
+            max_new_tokens=n,
+            do_sample=False,
+            num_beams=1,
+            use_cache=True,
+            pad_token_id=tok.pad_token_id,
+        )
+    prompt_len = enc.input_ids.shape[1]
+    return [row[prompt_len:].tolist() for row in out]
+
+
 @pytest.mark.skipif(not torch.cuda.is_available(), reason="needs CUDA")
 def test_paged_decode_matches_hf_batch(engine, hf):
-    """Same as above but as a multi-sequence batch — exercises mixed and pure-decode iters."""
+    """Engine batched generation should match HF batched generation token-for-token.
+    Sequential single-prompt HF is the wrong reference here — fp16 attention
+    drifts between B=1 and B=N for both implementations."""
     eng, eng_tok = engine
     hf_m, hf_tok = hf
-    hf_outs = [_hf_greedy(hf_m, hf_tok, p, 20) for p in PROMPTS]
+
+    hf_outs = _hf_greedy_batched(hf_m, hf_tok, PROMPTS, n=20)
+
     sp = SamplingParams(temperature=0.0, max_tokens=20)
     ids = [eng_tok.encode(p) for p in PROMPTS]
     eng_outs = eng.generate(PROMPTS, ids, sp)
+
     for p, hf_t, out in zip(PROMPTS, hf_outs, eng_outs, strict=True):
         eng_t = out.outputs[0].token_ids
+        # Strip HF's trailing pad/eos to compare just the generated content.
+        if hf_tok.eos_token_id in hf_t:
+            hf_t = hf_t[: hf_t.index(hf_tok.eos_token_id) + 1]
         assert eng_t == hf_t, f"\nprompt: {p!r}\nHF:  {hf_t}\nENG: {eng_t}"
 
 
